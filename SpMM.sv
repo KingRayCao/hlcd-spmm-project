@@ -42,11 +42,59 @@ module RedUnit(
     // num_el 总是赋值为 N
     assign num_el = `N;
     // delay 你需要自己为其赋值，表示电路的延迟
-    assign delay = 0;
+    assign delay = `lgN + 1;
+
+    data_t PfxSum[`lgN:0][`N-1:0];
+    logic [`lgN-1:0] out_idx_data[`lgN:0][`N-1:0];
+    logic pfx_enb[`lgN:0][`N-1:0];
+    generate
+        for(genvar i = 0; i < `N; i++) begin
+            always_ff @(posedge clock) begin
+                PfxSum[0][i] <= data[i];
+                out_idx_data[0][i] <= out_idx[i];
+                if(i >= 1) begin
+                    pfx_enb[0][i] <= split[i-1];
+                end
+                else begin
+                    pfx_enb[0][i] <= 0;
+                end
+            end
+        end
+    endgenerate
+
+    //PfxSum
+    generate
+        for(genvar i = 0; i < `lgN; i++) begin
+            for(genvar j = 0; j < `N; j++) begin
+                if(j >= (1 << i)) begin
+                    add_ add_inst(
+                        .clock(clock),
+                        .a(PfxSum[i][j]),
+                        .b((pfx_enb[i][j])?0:PfxSum[i][j - (1 << i)]),
+                        .out(PfxSum[i+1][j])
+                    );
+                end
+                else begin
+                    always_ff @(posedge clock) begin
+                        PfxSum[i+1][j] <= PfxSum[i][j];
+                    end
+                end
+                always_ff @(posedge clock) begin
+                    out_idx_data[i+1][j] <= out_idx_data[i][j];
+                    if(j >= (1<<i)) begin
+                            pfx_enb[i+1][j] <= pfx_enb[i][j-(1<<i)]|pfx_enb[i][j];
+                    end
+                    else begin
+                            pfx_enb[i+1][j] <= pfx_enb[i][j];
+                    end
+                end
+            end
+        end
+    endgenerate
 
     generate
         for(genvar i = 0; i < `N; i++) begin
-            assign out_data[i] = 0;
+            assign out_data[i] = PfxSum[`lgN][out_idx_data[`lgN][i]];
         end
     endgenerate
 endmodule

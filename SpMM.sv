@@ -34,8 +34,12 @@ module RedUnit(
                                 reset,
     input   data_t              data[`N-1:0],
     input   logic               split[`N-1:0],
+    input   logic [`lgN:0]      start_idx,
+    input   logic [`lgN:0]      end_idx,
     input   logic [`lgN-1:0]    out_idx[`N-1:0],
     output  data_t              out_data[`N-1:0],
+    output  logic [`lgN:0]      out_start_idx,
+    output  logic [`lgN:0]      out_end_idx,
     output  int                 delay,
     output  int                 num_el
 );
@@ -47,6 +51,12 @@ module RedUnit(
     data_t PfxSum[`lgN:0][`N-1:0];
     logic [`lgN-1:0] out_idx_data[`lgN:0][`N-1:0];
     logic pfx_enb[`lgN:0][`N-1:0];
+    logic [`lgN:0] start_idx_data[`lgN:0];
+    logic [`lgN:0] end_idx_data[`lgN:0];
+    always_ff @(posedge clock) begin
+        start_idx_data[0] <= start_idx;
+        end_idx_data[0] <= end_idx;
+    end
     generate
         for(genvar i = 0; i < `N; i++) begin
             always_ff @(posedge clock) begin
@@ -89,6 +99,10 @@ module RedUnit(
                     end
                 end
             end
+            always_ff @(posedge clock) begin
+                start_idx_data[i+1] <= start_idx_data[i];
+                end_idx_data[i+1] <= end_idx_data[i];
+            end
         end
     endgenerate
 
@@ -97,6 +111,8 @@ module RedUnit(
             assign out_data[i] = PfxSum[`lgN][out_idx_data[`lgN][i]];
         end
     endgenerate
+    assign out_start_idx = start_idx_data[`lgN];
+    assign out_end_idx = end_idx_data[`lgN];
 endmodule
 
 module PE(
@@ -114,11 +130,118 @@ module PE(
     // num_el 总是赋值为 N
     assign num_el = `N;
     // delay 你需要自己为其赋值，表示电路的延迟
-    assign delay = 0;
+    assign delay = `lgN + 3;
+    
+    // cnt
+    logic[`lgN:0] cnt;
+    always_ff @(posedge clock) begin
+        if(lhs_start || reset) begin
+            cnt <= 0;
+        end
+        else begin
+            cnt <= cnt + 1;
+        end
+    end
+    // product generation
+    data_t prod[`N-1:0];
+    generate
+        for(genvar i = 0; i < `N; i++) begin
+            mul_ mul_inst(
+                .clock(clock),
+                .a(lhs_data[i]),
+                .b(rhs[lhs_col[i]]),
+                .out(prod[i])
+            );
+        end
+    endgenerate
+    data_t prod_latch[`N-1:0];
+    always_ff @(posedge clock) begin
+        for(int i = 0; i < `N; i++) begin
+            prod_latch[i] <= prod[i];
+        end
+    end
+
+    // ptr load & split generation
+    logic [`dbLgN-1:0] ptr_latch[`N-1:0];
+    logic split[`N*`N-1:0];
+    always_ff @(posedge clock) begin
+        if(lhs_start) begin
+            for(int i = 0; i < `N; i++) begin
+                ptr_latch[i] <= lhs_ptr[i];
+            end
+            for(int i = 0; i < `N * `N; i++) begin
+                split[i] <= 0;
+            end
+            for(int i = 0; i < `N; i++) begin
+                split[lhs_ptr[i]] <= 1;
+            end
+        end
+    end
+    logic split_col[`N-1:0];
+    always_ff @(posedge clock) begin
+        for(int i = 0; i < `N; i++) begin
+            split_col[i] <= split[(cnt*`N)+i];
+        end
+    end
+    logic[`lgN:0] split_cnt;
+    always_comb begin
+        split_cnt = 0;
+        for(integer i = 0; i <= `N-1; i = i + 1) begin
+            split_cnt = split_cnt + split_col[i];
+        end
+    end
+
+    // out_idx generation
+    logic[`lgN-1:0] out_idx[`N-1:0], out_idx_latch[`N-1:0];
+    logic[`lgN-1:0] cur_idx;
+    always_ff @(posedge clock) begin
+        if(lhs_start) begin
+            cur_idx <= 0;
+        end
+        else begin
+            cur_idx <= cur_idx + split_cnt;
+        end
+    end
+    always_comb begin
+        for(integer i = 0; i < `N; i = i + 1) begin
+            if(i < cur_idx) begin
+                out_idx[i] = 0;
+            end
+            else if(ptr_latch[i] >= cnt*`N && ptr_latch[i] < (cnt+1)*`N) begin
+                out_idx[i] = ptr_latch[i] - cnt*`N;
+            end
+            else begin
+                out_idx[i] = `N-1;
+            end
+        end
+    end
+    always_ff @(posedge clock) begin
+        for(int i = 0; i < `N; i++) begin
+            out_idx_latch[i] <= out_idx[i];
+        end
+    end
+
+    // RedUnit
+    data_t ru_out[`N-1:0];
+    logic[`lgN:0] out_start_idx, out_end_idx;
+    RedUnit RU_inst(
+        .clock(clock),
+        .reset(reset),
+        .data(prod_latch),
+        .split(split_col),
+        .start_idx(cur_idx),
+        .end_idx(cur_idx + split_cnt),
+        .out_idx(out_idx_latch),
+        .out_data(ru_out),
+        .out_start_idx(out_start_idx),
+        .out_end_idx(out_end_idx),
+        .delay(),
+        .num_el()
+    );
 
     generate
         for(genvar i = 0; i < `N; i++) begin
-            assign out[i] = 0;
+            assign out[i] = (i >= out_start_idx && i < out_end_idx)?ru_out[i]:0;
         end
     endgenerate
 endmodule

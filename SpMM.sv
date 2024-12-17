@@ -142,6 +142,7 @@ module PE(
             cnt <= cnt + 1;
         end
     end
+
     // product generation
     data_t prod[`N-1:0];
     generate
@@ -183,54 +184,67 @@ module PE(
             split_col[i] <= split[(cnt*`N)+i];
         end
     end
-    logic[`lgN:0] split_cnt;
-    always_comb begin
-        split_cnt = 0;
-        for(integer i = 0; i <= `N-1; i = i + 1) begin
-            split_cnt = split_cnt + split_col[i];
-        end
-    end
 
-    // out_idx generation
+    // out_idx generation & blank row detection
     logic[`lgN-1:0] out_idx[`N-1:0], out_idx_latch[`N-1:0];
-    logic[`lgN-1:0] cur_idx;
+    logic[`lgN:0] cur_start_idx, cur_end_idx, cur_start_idx_latch, cur_end_idx_latch;
+    logic blank_row[`N-1:0], blank_row_latch[`N-1:0];
     always_ff @(posedge clock) begin
         if(lhs_start) begin
-            cur_idx <= 0;
+            cur_start_idx <= 0;
         end
         else begin
-            cur_idx <= cur_idx + split_cnt;
+            cur_start_idx <= cur_end_idx;
         end
     end
     always_comb begin
         for(integer i = 0; i < `N; i = i + 1) begin
-            if(i < cur_idx) begin
+            if(i < cur_start_idx) begin
                 out_idx[i] = 0;
             end
             else if(ptr_latch[i] >= cnt*`N && ptr_latch[i] < (cnt+1)*`N) begin
                 out_idx[i] = ptr_latch[i] - cnt*`N;
+                cur_end_idx = i + 1;
             end
             else begin
                 out_idx[i] = `N-1;
             end
         end
     end
+    generate
+        for(genvar i = 1; i < `N; i++) begin
+            always_comb begin
+                if(ptr_latch[i] == ptr_latch[i-1]) begin
+                    blank_row[i] = 1;
+                end
+                else begin
+                    blank_row[i] = 0;
+                end
+            end
+        end
+    endgenerate
+
     always_ff @(posedge clock) begin
         for(int i = 0; i < `N; i++) begin
             out_idx_latch[i] <= out_idx[i];
+            blank_row_latch[i] <= blank_row[i];
         end
+        cur_start_idx_latch <= cur_start_idx;
+        cur_end_idx_latch <= cur_end_idx;
     end
 
-    // RedUnit
+    // RedUnit & HALO
     data_t ru_out[`N-1:0];
     logic[`lgN:0] out_start_idx, out_end_idx;
+    data_t halo;
+    logic halo_en;
     RedUnit RU_inst(
         .clock(clock),
         .reset(reset),
         .data(prod_latch),
         .split(split_col),
-        .start_idx(cur_idx),
-        .end_idx(cur_idx + split_cnt),
+        .start_idx(cur_start_idx_latch),
+        .end_idx(cur_end_idx_latch),
         .out_idx(out_idx_latch),
         .out_data(ru_out),
         .out_start_idx(out_start_idx),
@@ -238,10 +252,38 @@ module PE(
         .delay(),
         .num_el()
     );
+    always_ff @(posedge clock) begin
+        if(lhs_start) begin
+            halo_en <= 0;
+            halo.data <= 0;
+        end
+        else begin
+            halo_en <= (ptr_latch[out_end_idx-1] % `N != `N-1);
+            halo.data <= ru_out[`N-1];
+        end
+    end
 
+    // output generation
     generate
-        for(genvar i = 0; i < `N; i++) begin
-            assign out[i] = (i >= out_start_idx && i < out_end_idx)?ru_out[i]:0;
+        for(genvar i = 0; i < `N; i = i + 1) begin
+            always_comb begin
+                if(blank_row_latch[i]) begin
+                    out[i] = 0;
+                end
+                else begin
+                    if(i >= out_start_idx && i < out_end_idx) begin
+                        if(i == out_start_idx) begin
+                            out[i] = ((halo_en)?halo:0) + ru_out[i];
+                        end
+                        else begin
+                            out[i] = ru_out[i];
+                        end
+                    end
+                    else begin
+                        out[i] = 0;
+                    end
+                end
+            end
         end
     endgenerate
 endmodule

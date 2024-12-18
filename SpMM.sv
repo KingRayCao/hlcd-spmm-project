@@ -186,28 +186,39 @@ module PE(
     end
 
     // out_idx generation & blank row detection
-    logic[`lgN-1:0] out_idx[`N-1:0], out_idx_latch[`N-1:0];
-    logic[`lgN:0] cur_start_idx, cur_end_idx, cur_start_idx_latch, cur_end_idx_latch;
+    logic[`lgN-1:0] out_idx_latch[`N-1:0];
+    logic[`lgN:0] cur_start_idx_latch, cur_end_idx_latch;
     logic blank_row[`N-1:0], blank_row_latch[`N-1:0];
     always_ff @(posedge clock) begin
         if(lhs_start) begin
-            cur_start_idx <= 0;
+            cur_start_idx_latch <= 0;
         end
         else begin
-            cur_start_idx <= cur_end_idx;
+            cur_start_idx_latch <= cur_end_idx_latch;
         end
     end
-    always_comb begin
+    always_ff @(posedge clock) begin
         for(integer i = 0; i < `N; i = i + 1) begin
-            if(i < cur_start_idx) begin
-                out_idx[i] = 0;
+            if(i < cur_start_idx_latch) begin
+                out_idx_latch[i] <= 0;
             end
             else if(ptr_latch[i] >= cnt*`N && ptr_latch[i] < (cnt+1)*`N) begin
-                out_idx[i] = ptr_latch[i] - cnt*`N;
-                cur_end_idx = i + 1;
+                out_idx_latch[i] <= ptr_latch[i] - cnt*`N;
             end
             else begin
-                out_idx[i] = `N-1;
+                out_idx_latch[i] <= `N-1;
+            end
+        end
+    end
+    always_ff @(posedge clock) begin
+        if(lhs_start) begin
+            cur_end_idx_latch <= 0;
+        end
+        else begin
+            for(integer i = 0; i < `N; i = i + 1) begin
+                if(ptr_latch[i] >= cnt*`N && ptr_latch[i] < (cnt+1)*`N) begin
+                    cur_end_idx_latch <= i+1;
+                end
             end
         end
     end
@@ -226,11 +237,8 @@ module PE(
 
     always_ff @(posedge clock) begin
         for(int i = 0; i < `N; i++) begin
-            out_idx_latch[i] <= out_idx[i];
             blank_row_latch[i] <= blank_row[i];
         end
-        cur_start_idx_latch <= cur_start_idx;
-        cur_end_idx_latch <= cur_end_idx;
     end
 
     // RedUnit & HALO

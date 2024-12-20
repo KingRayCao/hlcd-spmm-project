@@ -2,6 +2,8 @@
 
 在这个 Project 里，你需要写一个 SpMM 的硬件加速器。这个 repo 会储存后续的代码更新。
 
+有问题可以先到 [Issues](https://github.com/pku-liang/hlcd-spmm-project/issues?q=label:question) 里去找找看。
+
 **第一次评测时间：12月27日**
 **第二次评测时间：1月10日**
 
@@ -198,6 +200,13 @@ module SpMM(
 * Output Stationary 指在这次计算中，直接将 A * B 加到上一次的输出矩阵中
 
 为了进一步增大阵列的吞吐量，可以将 rhs buffer 和 output buffer 实现为 double buffer。保证在计算的同时，也可以读入下一次计算的输入数据。
+
+<details>
+<summary>Weight Stationary 的时序图</summary>
+
+![](https://svg.wavedrom.com/github/pku-liang/hlcd-spmm-project/main/figs/pe-array-ws2.json5)
+
+</details>
 
 ## 测试与评分
 
